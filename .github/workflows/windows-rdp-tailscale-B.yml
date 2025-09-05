@@ -1,16 +1,22 @@
 name: Windows RDP via Tailscale (B)
 
 on:
+  workflow_dispatch: {}
   workflow_run:
     workflows: ["Windows RDP via Tailscale (A)"]
     types: [completed]
 
+# Prevent overlapping copies of this loop from running at the same time
+concurrency:
+  group: rdp-loop
+  cancel-in-progress: true
+
 jobs:
   rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 360        # ~6h GitHub cap
     env:
-      FIXED_HOSTNAME: gha-rdp
+      FIXED_HOSTNAME: gha-rdp   # same hostname so Tailscale reuses/renames the device
       RDP_USER: Bullettemporary
       RDP_PASSWORD: Bullet@12345
       TAILSCALE_AUTH_KEY: tskey-auth-k9jRYku9c111CNTRL-EH6Haqd3XkDjEh1TNgKujDzgLUkQH4cP
@@ -40,12 +46,12 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member $env:RDP_USER -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:RDP_USER -ErrorAction SilentlyContinue
 
-      - name: Tailscale up (ephemeral, fixed hostname)
+      - name: Tailscale up (fixed hostname)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          & $ts up --authkey "$env:TAILSCALE_AUTH_KEY" --hostname "$env:FIXED_HOSTNAME" --ephemeral --reset
+          & $ts up --authkey "$env:TAILSCALE_AUTH_KEY" --hostname "$env:FIXED_HOSTNAME" --reset
           if ($LASTEXITCODE -ne 0) { throw "tailscale up failed" }
 
           $ip4 = & $ts ip -4
