@@ -1,0 +1,72 @@
+name: Windows RDP via Tailscale (A)
+
+on:
+  workflow_dispatch: {}
+  workflow_run:
+    workflows: ["Windows RDP via Tailscale (B)"]
+    types: [completed]
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360      # ~6h cap on GitHub-hosted Windows
+    env:
+      FIXED_HOSTNAME: gha-rdp
+      RDP_USER: Bullettemporary
+      RDP_PASSWORD: Bullet@12345
+      TAILSCALE_AUTH_KEY: tskey-auth-k9jRYku9c111CNTRL-EH6Haqd3XkDjEh1TNgKujDzgLUkQH4cP
+    steps:
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $msi  = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
+          Remove-Item $msi -Force
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" version
+
+      - name: Enable RDP + user + firewall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
+          $sec = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+          if (-not (Get-LocalUser -Name $env:RDP_USER -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name $env:RDP_USER -Password $sec -AccountNeverExpires
+          } else {
+            Set-LocalUser -Name $env:RDP_USER -Password $sec -AccountNeverExpires:$true
+            Enable-LocalUser -Name $env:RDP_USER
+          }
+          Add-LocalGroupMember -Group "Administrators" -Member $env:RDP_USER -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:RDP_USER -ErrorAction SilentlyContinue
+
+      - name: Tailscale up (ephemeral, fixed hostname)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          # --ephemeral because the key is marked ephemeral; --reset for clean state
+          & $ts up --authkey "$env:TAILSCALE_AUTH_KEY" --hostname "$env:FIXED_HOSTNAME" --ephemeral --reset
+          if ($LASTEXITCODE -ne 0) { throw "tailscale up failed" }
+
+          $ip4 = & $ts ip -4
+          $ip6 = & $ts ip -6
+
+          Write-Host "================ RDP CONNECT ================"
+          Write-Host "MagicDNS name : $env:FIXED_HOSTNAME"
+          Write-Host "IPv4          : $ip4"
+          Write-Host "IPv6          : $ip6"
+          Write-Host "mstsc         : mstsc /v:$($env:FIXED_HOSTNAME)"
+          Write-Host "Username      : $env:RDP_USER"
+          Write-Host "Password      : $env:RDP_PASSWORD"
+          Write-Host "============================================"
+
+      - name: Keep alive (~5h 50m)
+        shell: pwsh
+        run: |
+          $until = (Get-Date).AddMinutes(350)
+          while ((Get-Date) -lt $until) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP alive…"
+            Start-Sleep -Seconds 300
+          }
