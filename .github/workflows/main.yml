@@ -1,0 +1,109 @@
+name: Windows RDP via ngrok (6h)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360   # GitHub max for a single job is 6h
+
+    steps:
+      - name: Prepare RDP user and firewall
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $u = 'Bullettemporary'
+          $p = 'Bullet@12345'
+          $sec = ConvertTo-SecureString $p -AsPlainText -Force
+
+          # Create/ensure local user
+          if (-not (Get-LocalUser -Name $u -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name $u -Password $sec -AccountNeverExpires -PasswordNeverExpires:$true
+            Add-LocalGroupMember -Group 'Administrators' -Member $u
+            Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $u
+          } else {
+            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires:$true
+            Enable-LocalUser -Name $u
+            Add-LocalGroupMember -Group 'Administrators' -Member $u -ErrorAction SilentlyContinue
+            Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $u -ErrorAction SilentlyContinue
+          }
+
+          # Enable RDP & firewall
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' | Out-Null
+          netsh advfirewall firewall add rule name="RDP-3389" dir=in action=allow protocol=TCP localport=3389 | Out-Null
+
+      - name: Download & configure ngrok
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "$env:TEMP\ngrok"
+          $exe  = Join-Path $base 'ngrok.exe'
+          if (Test-Path $base) { Remove-Item $base -Recurse -Force }
+          New-Item -ItemType Directory -Path $base | Out-Null
+
+          Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$base\ngrok.zip"
+          Expand-Archive "$base\ngrok.zip" -DestinationPath $base -Force
+          Remove-Item "$base\ngrok.zip" -Force
+
+          # ====== AUTH TOKEN (INLINE, INSECURE) ======
+          & $exe config add-authtoken "2jgauuGca0GEBg29ISJorFsRCAH_5SwCikeak5ox5QcfuqZPx"
+          # ====== If you prefer GitHub Secret, use instead: ======
+          # & $exe config add-authtoken "${{ secrets.NGROK_AUTHTOKEN }}"
+
+      - name: Start ngrok tcp and show address
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "$env:TEMP\ngrok"
+          $exe  = Join-Path $base 'ngrok.exe'
+          $log  = Join-Path $base 'ngrok.log'
+          if (Test-Path $log) { Remove-Item $log -Force }
+
+          # Start ngrok (log to stdout only, captured to file)
+          $args = 'tcp 3389 --log=stdout --log-format=logfmt --log-level=warn'
+          $p = Start-Process -NoNewWindow -FilePath $exe -ArgumentList $args -RedirectStandardOutput $log -PassThru
+
+          Start-Sleep 8
+          $addrLine = (Get-Content $log | Select-String 'tcp://').Line | Select-Object -Last 1
+          if ($addrLine -match 'tcp://([^\s:]+):(\d+)') { $host=$Matches[1]; $port=$Matches[2] }
+
+          Write-Host "================ RDP CONNECT ================"
+          if ($host) {
+            Write-Host "Address : tcp://$host:$port"
+            Write-Host "mstsc   : mstsc /v:$host`:$port"
+          } else {
+            Write-Warning "Waiting for ngrok tcp URL… check logs below."
+          }
+          Write-Host "Username: Bullettemporary"
+          Write-Host "Password: Bullet@12345"
+          Write-Host "============================================"
+
+          # Lightweight heartbeat until job timeout (~6h)
+          while ($true) {
+            if ($p.HasExited) { Write-Warning "ngrok exited"; break }
+            # Re-print the latest URL every 5 minutes (in case it rotated)
+            $line = (Get-Content $log | Select-String 'tcp://').Line | Select-Object -Last 1
+            if ($line -match 'tcp://([^\s:]+):(\d+)') {
+              $h=$Matches[1]; $pt=$Matches[2]
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] mstsc /v:$h`:$pt"
+            }
+            Start-Sleep 300
+          }
+
+      # (Optional) Print last ngrok lines for debugging on completion
+      - name: Tail ngrok log (last 100 lines)
+        if: always()
+        shell: powershell
+        run: |
+          $log = "$env:TEMP\ngrok\ngrok.log"
+          if (Test-Path $log) {
+            Write-Host "---- ngrok.log (last 100 lines) ----"
+            Get-Content $log -Tail 100
+          } else {
+            Write-Host "ngrok.log not found."
+          }
