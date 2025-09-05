@@ -9,7 +9,7 @@ on:
 jobs:
   rdp:
     runs-on: windows-latest
-    timeout-minutes: 360      # ~6h cap on GitHub-hosted Windows
+    timeout-minutes: 360      # ~6h GitHub cap
     env:
       FIXED_HOSTNAME: gha-rdp
       RDP_USER: Bullettemporary
@@ -41,13 +41,12 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member $env:RDP_USER -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:RDP_USER -ErrorAction SilentlyContinue
 
-      - name: Tailscale up (ephemeral, fixed hostname)
+      - name: Tailscale up (fixed hostname)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          # --ephemeral because the key is marked ephemeral; --reset for clean state
-          & $ts up --authkey "$env:TAILSCALE_AUTH_KEY" --hostname "$env:FIXED_HOSTNAME" --ephemeral --reset
+          & $ts up --authkey "$env:TAILSCALE_AUTH_KEY" --hostname "$env:FIXED_HOSTNAME" --reset
           if ($LASTEXITCODE -ne 0) { throw "tailscale up failed" }
 
           $ip4 = & $ts ip -4
