@@ -41,8 +41,8 @@ defaults:
     shell: pwsh
 
 env:
-  RDP_USER: Bullettemporary
-  RDP_PASS: Bullet@12345
+  RDP_USER: shan0103
+  RDP_PASS: Shan0103@
   TS_HOSTNAME: bullet
 
 jobs:
